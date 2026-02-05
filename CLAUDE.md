@@ -15,11 +15,14 @@ A browser extension + web app that converts any text to 8 different tones (Forma
 ## Tech Stack (Planned)
 
 - **Frontend:** React 18 + TypeScript, Tailwind CSS, Vite, Zustand (state management)
-- **Chrome Extension:** Manifest V3
+- **Browser Extensions:** Chrome (MV3), Firefox, Edge
 - **Backend:** Node.js + Express, REST API
 - **Database:** Google Firestore
-- **Auth:** Firebase Authentication
-- **AI:** OpenAI API (gpt-4o-mini)
+- **Auth:** Firebase Authentication (email verification required)
+- **AI:** Tiered LLM System
+  - Free: GPT-4.1 nano (cost-optimized, $0.00007/conv)
+  - Pro/Team: Claude 3 Haiku (quality-optimized, $0.000625/conv)
+  - Fallback: GPT-4o-mini (all tiers)
 - **Payments:** Stripe
 - **Hosting:** Vercel (frontend and backend)
 
@@ -27,45 +30,65 @@ A browser extension + web app that converts any text to 8 different tones (Forma
 
 ```
 toneshift/
-├── web-app/              # React web application
-│   ├── src/
-│   │   ├── components/   # UI components
-│   │   ├── hooks/        # Custom React hooks
-│   │   ├── store/        # Zustand state management
-│   │   └── services/     # API client services
-├── chrome-extension/     # Manifest V3 extension
-│   ├── manifest.json
-│   ├── content/          # Content scripts for Gmail
-│   ├── popup/            # Extension popup UI
-│   └── background/       # Service worker
-├── backend/              # Express API server
-│   ├── src/
-│   │   ├── routes/       # API routes
-│   │   ├── services/     # Business logic (OpenAI, Stripe)
-│   │   ├── middleware/   # Auth, rate limiting
-│   │   └── config/       # Firebase, OpenAI config
-└── shared/               # Shared types/utilities
+├── apps/
+│   ├── backend/              # Express API server
+│   │   ├── src/
+│   │   │   ├── config/       # Firebase, LLM config
+│   │   │   ├── middleware/   # Auth, rate limiting
+│   │   │   ├── services/     # LLM, Quota, Stripe
+│   │   │   │   └── llm/      # Tiered LLM providers
+│   │   │   └── routes/       # API endpoints
+│   │   └── package.json
+│   ├── web/                  # React web app
+│   │   ├── src/
+│   │   │   ├── components/   # UI components
+│   │   │   ├── lib/          # Firebase, API client
+│   │   │   └── stores/       # Zustand stores
+│   │   └── package.json
+│   └── extension/
+│       ├── chrome/           # Chrome MV3
+│       ├── firefox/          # Firefox (Phase 2)
+│       └── edge/             # Edge (Phase 2)
+├── packages/
+│   └── extension-core/       # Shared extension code (Phase 2)
+├── docs/
+│   └── plans/
+├── package.json
+└── pnpm-workspace.yaml
 ```
 
 ## Core Features (MVP)
 
-1. **ToneShift Engine:** 8 tones via OpenAI API (gpt-4o-mini)
-2. **Web App:** Paste email → select tone → get converted result
-3. **Chrome Extension:** Gmail integration with inline ToneShift button
+1. **ToneShift Engine:** 8 tones via tiered LLM system
+2. **Web App:** Paste text → select tone → get converted result
+3. **Chrome Extension:** Works on ALL text inputs (Gmail, LinkedIn, Slack, etc.)
 4. **User Auth:** Firebase Authentication (email verification required)
-5. **Quota System:** Free tier (5/day), Paid tier (unlimited) - server-side enforcement
-6. **Payments:** Stripe subscriptions ($4.99/month starter)
+5. **Quota System:** Free tier (10/day), Pro (unlimited) - server-side enforcement
+6. **Payments:** Stripe subscriptions
+
+## Pricing Model
+
+| Tier | Price | Users | Daily Limit | LLM Model |
+|------|-------|-------|-------------|-----------|
+| FREE | $0 | 1 | 10/day | GPT-4.1 nano |
+| PRO | $4.99/mo | 1 | Unlimited | Claude 3 Haiku |
+| TEAM | $13.99/mo | Up to 5 | Unlimited | Claude 3 Haiku |
 
 ## Key Integration Points
 
-- **Gmail:** Content script injects tone conversion UI into compose window
-- **OpenAI:** Backend proxies requests to protect API key
-- **Firebase:** Auth tokens validated on backend, Firestore stores user data and usage quotas
+- **Browser Extension:** Content script detects text inputs, injects ToneShift button
+- **LLM Providers:** Anthropic (Claude) + OpenAI with automatic fallback
+- **Firebase:** Auth tokens validated on backend, Firestore stores user data and quotas
 - **Stripe:** Webhook handlers for subscription events
 
-## Business Rules
+## Security
 
-- Free tier: 5 conversions per day per user
-- Starter ($4.99/mo): 50 conversions per day
-- Professional ($29.99/mo): Unlimited conversions
-- API cost: ~$0.02 per conversion (gpt-4o-mini)
+- All LLM calls go through backend only (API keys never exposed)
+- Quota tied to Firebase user ID (prevents reinstall abuse)
+- Email verification required before first conversion
+- Atomic Firestore transactions for quota enforcement
+- Rate limiting: IP + user-based
+
+## Commit Guidelines
+
+- KHÔNG ghi Co-Author trong bất kỳ commit nào

@@ -10,7 +10,7 @@
 
 **Architecture:** Monorepo với React frontend (Vite), Node.js/Express backend, Firebase Auth + Firestore cho user management và quota tracking, Stripe cho payments. Tất cả API calls đều đi qua authenticated backend để ngăn quota bypass.
 
-**Tech Stack:** React 18, TypeScript, Tailwind CSS, Vite, Node.js, Express, Firebase Auth, Firestore, OpenAI API (gpt-4o-mini), Stripe, Vercel, Browser Extensions (Chrome MV3, Firefox, Edge)
+**Tech Stack:** React 18, TypeScript, Tailwind CSS, Vite, Node.js, Express, Firebase Auth, Firestore, **Tiered LLM System** (GPT-4.1 nano for Free, Claude 3 Haiku for Pro/Team, GPT-4o-mini fallback), Stripe, Vercel, Browser Extensions (Chrome MV3, Firefox, Edge)
 
 **Lưu ý commits:** KHÔNG ghi Co-Author trong bất kỳ commit nào.
 
@@ -66,35 +66,82 @@
 
 ---
 
-## Cost Analysis (OpenAI GPT-4o-mini)
+## Tiered LLM Model Strategy
 
-### API Pricing
-| Token Type | Cost |
-|------------|------|
-| Input | $0.15 / 1M tokens |
-| Output | $0.60 / 1M tokens |
+### Model Selection by Tier
 
-### Cost per Conversion
+| Tier | Primary Model | Cost/Conv | Fallback | Quality |
+|------|---------------|-----------|----------|---------|
+| **FREE** | GPT-4.1 nano | $0.00007 | GPT-4o-mini | ⭐⭐⭐ |
+| **PRO** | Claude 3 Haiku | $0.000625 | GPT-4o-mini | ⭐⭐⭐⭐⭐ |
+| **TEAM** | Claude 3 Haiku | $0.000625 | GPT-4o-mini | ⭐⭐⭐⭐⭐ |
+
+**Lý do:**
+- FREE: GPT-4.1 nano rẻ gấp 4.5x so với GPT-4o-mini, đủ tốt cho trial
+- PRO/TEAM: Claude 3 Haiku có chất lượng writing tốt nhất, ít hallucination 30%
+- Fallback: GPT-4o-mini đảm bảo reliability khi primary fail
+
+### API Pricing Reference
+
+| Model | Input ($/1M) | Output ($/1M) | Cost/Conv* |
+|-------|--------------|---------------|------------|
+| GPT-4.1 nano | $0.02 | $0.15 | **$0.00007** |
+| GPT-4o-mini | $0.15 | $0.60 | $0.000315 |
+| Claude 3 Haiku | $0.25 | $1.25 | $0.000625 |
+
+*500 input + 400 output tokens
+
+### Cost Analysis by Tier
+
+**FREE tier (GPT-4.1 nano):**
 ```
-Input:  500 tokens × $0.00000015 = $0.000075
-Output: 400 tokens × $0.0000006  = $0.00024
-────────────────────────────────────────────
-Total: ~$0.0003 → round up to $0.001/conversion
+Input:  500 tokens × $0.00000002 = $0.00001
+Output: 400 tokens × $0.00000015 = $0.00006
+Total: $0.00007/conversion
 ```
 
-### Profit Margin Analysis
-| Tier | Price | Scenario | Conv/mo | Cost | Profit | Margin |
-|------|-------|----------|---------|------|--------|--------|
-| FREE | $0 | Active (10/day) | 300 | $0.30 | -$0.30 | Loss (CAC) |
-| PRO | $4.99 | Heavy (50/day) | 1,500 | $1.50 | $3.49 | 70% ✅ |
-| PRO | $4.99 | Average (20/day) | 600 | $0.60 | $4.39 | 88% ✅ |
-| TEAM | $13.99 | 5 heavy | 7,500 | $7.50 | $6.49 | 46% ✅ |
-| TEAM | $13.99 | 5 average | 3,000 | $3.00 | $10.99 | 79% ✅ |
+**PRO/TEAM tier (Claude 3 Haiku):**
+```
+Input:  500 tokens × $0.00000025 = $0.000125
+Output: 400 tokens × $0.00000125 = $0.0005
+Total: $0.000625/conversion
+```
 
-**Pricing strategy:**
-- Margin healthy ở mọi scenario (min 46%)
-- Vẫn rẻ hơn competitors (Grammarly $12, Wordtune $10)
-- Team discount hấp dẫn: $2.80/user vs $4.99 (44% savings)
+### Profit Margin Analysis (Tiered)
+
+| Tier | Price | Model | Conv/mo | API Cost | Profit | Margin |
+|------|-------|-------|---------|----------|--------|--------|
+| FREE | $0 | nano | 300 | $0.02 | -$0.02 | Loss (CAC) |
+| PRO | $4.99 | Claude | 1,500 | $0.94 | $4.05 | **81%** ✅ |
+| PRO | $4.99 | Claude | 600 | $0.38 | $4.61 | **92%** ✅ |
+| TEAM | $13.99 | Claude | 7,500 | $4.69 | $9.30 | **66%** ✅ |
+| TEAM | $13.99 | Claude | 3,000 | $1.88 | $12.11 | **87%** ✅ |
+
+**So sánh với single-model approach:**
+| Strategy | 1.2M conv/mo | Quality |
+|----------|--------------|---------|
+| All Claude 3 Haiku | $750 | ⭐⭐⭐⭐⭐ all |
+| All GPT-4o-mini | $378 | ⭐⭐⭐⭐ all |
+| All GPT-4.1 nano | $84 | ⭐⭐⭐ all |
+| **Tiered (this plan)** | **$584** | ⭐⭐⭐ free, ⭐⭐⭐⭐⭐ paid |
+
+### Environment Configuration
+
+```bash
+# Free tier: Cost-optimized
+LLM_FREE_PRIMARY_PROVIDER=openai
+LLM_FREE_PRIMARY_MODEL=gpt-4.1-nano
+LLM_FREE_FALLBACK_MODEL=gpt-4o-mini
+
+# Pro/Team tier: Quality-optimized
+LLM_PRO_PRIMARY_PROVIDER=anthropic
+LLM_PRO_PRIMARY_MODEL=claude-3-haiku-20240307
+LLM_PRO_FALLBACK_MODEL=gpt-4o-mini
+```
+
+**Dễ dàng điều chỉnh sau launch:**
+- Nếu Free users feedback tốt → giữ nguyên
+- Nếu Free users feedback xấu → upgrade lên GPT-4o-mini
 
 ---
 
@@ -120,23 +167,34 @@ Total: ~$0.0003 → round up to $0.001/conversion
 | Domain (.io) | $12 |
 | **Total** | **$17** |
 
-### Monthly Cost by Scale
+### Monthly Cost by Scale (Tiered Model)
 
-| Scale | Users | Paid | Vercel | Firebase | OpenAI | Stripe | Total | Revenue | Margin |
-|-------|-------|------|--------|----------|--------|--------|-------|---------|--------|
-| Launch | 1K | 100 | $20 | $0 | $30 | $15 | **$65** | $499 | **87%** |
-| Growth | 10K | 1K | $35 | $20 | $200 | $150 | **$405** | $4,990 | **92%** |
-| Scale | 100K | 10K | $150 | $200 | $1,500 | $1,500 | **$3,350** | $49,900 | **93%** |
+| Scale | Free | Paid | Vercel | Firebase | LLM API* | Stripe | Total | Revenue | Margin |
+|-------|------|------|--------|----------|----------|--------|-------|---------|--------|
+| Launch | 1K | 100 | $20 | $0 | $23 | $15 | **$58** | $499 | **88%** |
+| Growth | 10K | 1K | $35 | $20 | $180 | $150 | **$385** | $4,990 | **92%** |
+| Scale | 100K | 10K | $150 | $200 | $650 | $1,500 | **$2,500** | $49,900 | **95%** |
+
+*LLM API = GPT-4.1 nano (Free) + Claude 3 Haiku (Pro/Team)
 
 ### Cost Breakdown (at scale)
 
 ```
-OpenAI API:    ~45% of costs (largest)
-Stripe fees:   ~45% of costs
-Infra (Vercel/Firebase): ~10% of costs
+LLM API:       ~26% of costs (optimized with tiered models)
+Stripe fees:   ~60% of costs (largest at scale)
+Infra:         ~14% of costs
 ```
 
-**Kết luận:** Business model sustainable với margin 87-93% ở mọi scale.
+### Tiered Model Cost Projection (1,600 users)
+
+| Tier | Users | Conv/mo | Model | Cost/Conv | Monthly |
+|------|-------|---------|-------|-----------|---------|
+| FREE | 1,000 | 300K | GPT-4.1 nano | $0.00007 | **$21** |
+| PRO | 500 | 750K | Claude Haiku | $0.000625 | **$469** |
+| TEAM | 100 | 150K | Claude Haiku | $0.000625 | **$94** |
+| **Total** | 1,600 | 1.2M | Mixed | - | **$584** |
+
+**Kết luận:** Tiered model giúp giảm 22% chi phí so với all-Claude, trong khi vẫn giữ quality cho paying users.
 
 ---
 
