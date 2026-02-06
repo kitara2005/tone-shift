@@ -268,7 +268,7 @@ Infra:         ~14% of costs
 
 ---
 
-## Task Overview - Phase 1 (17 Tasks)
+## Task Overview - Phase 1 (25 Tasks)
 
 ### Phase 1.1: Project Setup (Tasks 1-2)
 | Task | Mô tả | Files |
@@ -287,7 +287,7 @@ Infra:         ~14% of costs
 ### Phase 1.3: Core Features (Tasks 7-9)
 | Task | Mô tả | Files |
 |------|-------|-------|
-| 7 | OpenAI tone conversion service (8 tones) | `apps/backend/src/services/openai.ts` |
+| 7 | Tiered LLM Service (GPT-4.1 nano + Claude 3 Haiku) | `apps/backend/src/services/llm/*` |
 | 8 | Conversion API endpoint với quota check | `apps/backend/src/routes/convert.ts` |
 | 9 | Stripe payment integration + webhooks | `apps/backend/src/services/stripe.ts`, `apps/backend/src/routes/billing.ts` |
 
@@ -312,14 +312,20 @@ Infra:         ~14% of costs
 | 17 | Disposable email blocking | `apps/backend/src/services/security/email.ts` |
 | 18 | Firestore security rules | `firestore.rules` |
 
-### Phase 1.7: Build & Deploy (Tasks 19-21)
+### Phase 1.7: Backup & Recovery (Tasks 19-22) ⚠️ CRITICAL
 | Task | Mô tả | Files |
 |------|-------|-------|
-| 19 | Build configuration cho all apps | `package.json`, `apps/*/vite.config.ts` |
-| 20 | Vercel deployment configuration | `apps/*/vercel.json` |
-| 21 | Security documentation | `docs/SECURITY.md` |
+| 19 | **Audit Logging Service** - Log mọi thay đổi subscription | `apps/backend/src/services/auditLog.ts` |
+| 20 | **Daily Backup Job** - Backup Firestore lên Cloud Storage | `apps/backend/src/jobs/backup.ts` |
+| 21 | **Recovery Service** - Sync từ Stripe + Restore từ backup | `apps/backend/src/services/recovery.ts` |
+| 22 | **Admin Recovery API** + Data Consistency Monitor | `apps/backend/src/routes/admin.ts`, `apps/backend/src/jobs/consistency.ts` |
 
----
+### Phase 1.8: Build & Deploy (Tasks 23-25)
+| Task | Mô tả | Files |
+|------|-------|-------|
+| 23 | Build configuration cho all apps | `package.json`, `apps/*/vite.config.ts` |
+| 24 | Vercel + Cloud Scheduler deployment | `apps/*/vercel.json`, `scheduler.yaml` |
+| 25 | Security & Recovery documentation | `docs/SECURITY.md`, `docs/RECOVERY.md` |
 
 ---
 
@@ -694,6 +700,294 @@ const MAX_TEAM_MEMBERS = 5; // Team tier limit
 
 ---
 
+## Backup & Recovery Strategy
+
+### Data Criticality
+
+| Data | Criticality | Mất = ? | Recovery Source |
+|------|-------------|---------|-----------------|
+| `users/{userId}` (tier, subscription) | 🔴 CRITICAL | Mất tiền/User | Stripe API |
+| `audit_logs` | 🔴 CRITICAL | Mất audit trail | Daily backup |
+| `conversions` | 🟡 IMPORTANT | Mất history | Daily backup |
+| `feedback` | 🟡 IMPORTANT | Mất analytics | Daily backup |
+| `dailyUsage` | 🟢 LOW | Reset hàng ngày | Không cần |
+
+### Audit Logging (Transaction Logs)
+
+Ghi log MỌI thay đổi subscription để có thể trace và recover:
+
+```typescript
+// apps/backend/src/services/auditLog.ts
+
+interface AuditLog {
+  id: string;
+  timestamp: Date;
+  action: 'subscription_created' | 'subscription_updated' | 'subscription_canceled' |
+          'tier_changed' | 'payment_received' | 'payment_failed';
+  userId: string;
+  data: {
+    before?: any;
+    after: any;
+    stripeEventId?: string;
+    stripeCustomerId?: string;
+    stripeSubscriptionId?: string;
+    amount?: number;
+  };
+  source: 'stripe_webhook' | 'admin' | 'system';
+}
+
+export async function logSubscriptionChange(log: Omit<AuditLog, 'id' | 'timestamp'>) {
+  const db = getFirestore();
+
+  await db.collection('audit_logs').add({
+    ...log,
+    timestamp: FieldValue.serverTimestamp(),
+  });
+
+  console.log(`[AUDIT] ${log.action} for user ${log.userId}:`, JSON.stringify(log.data));
+}
+```
+
+### Daily Firestore Backup
+
+Backup toàn bộ critical collections lên Cloud Storage mỗi ngày:
+
+```typescript
+// apps/backend/src/jobs/backup.ts
+// Schedule: Cloud Scheduler - 0 3 * * * (3AM daily)
+
+import { Storage } from '@google-cloud/storage';
+
+const BACKUP_BUCKET = 'toneshift-backups';
+const BACKUP_COLLECTIONS = ['users', 'audit_logs', 'conversions', 'feedback'];
+
+export async function backupFirestore() {
+  const db = getFirestore();
+  const storage = new Storage();
+  const timestamp = new Date().toISOString().split('T')[0]; // 2026-02-06
+
+  for (const collectionName of BACKUP_COLLECTIONS) {
+    const snapshot = await db.collection(collectionName).get();
+    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+    const fileName = `${timestamp}/${collectionName}.json`;
+    const file = storage.bucket(BACKUP_BUCKET).file(fileName);
+
+    await file.save(JSON.stringify(data, null, 2), {
+      contentType: 'application/json',
+    });
+
+    console.log(`✅ Backed up ${collectionName}: ${data.length} documents`);
+  }
+}
+```
+
+**Backup structure:**
+```
+gs://toneshift-backups/
+├── 2026-02-06/
+│   ├── users.json
+│   ├── audit_logs.json
+│   ├── conversions.json
+│   └── feedback.json
+├── 2026-02-05/
+└── ... (giữ 30 ngày)
+```
+
+### Recovery từ Stripe (Source of Truth)
+
+Stripe lưu TẤT CẢ payment history. Có thể recover subscriptions từ Stripe:
+
+```typescript
+// apps/backend/src/services/recovery.ts
+
+export async function recoverAllSubscriptionsFromStripe() {
+  const db = getFirestore();
+  let recovered = 0;
+
+  // Lấy tất cả active subscriptions từ Stripe
+  const subscriptions = await stripe.subscriptions.list({
+    status: 'active',
+    limit: 100,
+    expand: ['data.customer'],
+  });
+
+  for (const sub of subscriptions.data) {
+    const customer = sub.customer as Stripe.Customer;
+    const userId = customer.metadata?.firebaseUserId;
+
+    if (!userId) continue;
+
+    await db.collection('users').doc(userId).set({
+      tier: 'pro',
+      email: customer.email,
+      stripeCustomerId: customer.id,
+      stripeSubscriptionId: sub.id,
+      subscriptionStatus: sub.status,
+      currentPeriodEnd: new Date(sub.current_period_end * 1000),
+      cancelAtPeriodEnd: sub.cancel_at_period_end,
+    }, { merge: true });
+
+    recovered++;
+  }
+
+  return { totalRecovered: recovered };
+}
+
+export async function recoverUserFromStripe(userId: string) {
+  // Tìm customer trong Stripe bằng metadata
+  const customers = await stripe.customers.search({
+    query: `metadata['firebaseUserId']:'${userId}'`,
+  });
+
+  if (customers.data.length === 0) {
+    return { success: false, error: 'Customer not found' };
+  }
+
+  const customer = customers.data[0];
+  const subscriptions = await stripe.subscriptions.list({
+    customer: customer.id,
+    status: 'active',
+  });
+
+  const tier = subscriptions.data.length > 0 ? 'pro' : 'free';
+
+  await db.collection('users').doc(userId).set({
+    tier,
+    email: customer.email,
+    stripeCustomerId: customer.id,
+    ...(subscriptions.data[0] && {
+      stripeSubscriptionId: subscriptions.data[0].id,
+      subscriptionStatus: subscriptions.data[0].status,
+      currentPeriodEnd: new Date(subscriptions.data[0].current_period_end * 1000),
+    }),
+  }, { merge: true });
+
+  return { success: true, tier };
+}
+```
+
+### Recovery từ Backup
+
+```typescript
+export async function restoreFromBackup(date: string, collections?: string[]) {
+  const db = getFirestore();
+  const storage = new Storage();
+  const targetCollections = collections || ['users', 'audit_logs'];
+
+  for (const collectionName of targetCollections) {
+    const file = storage.bucket(BACKUP_BUCKET).file(`${date}/${collectionName}.json`);
+    const [content] = await file.download();
+    const data = JSON.parse(content.toString());
+
+    // Batch write
+    const batch = db.batch();
+    for (const doc of data) {
+      const { id, ...docData } = doc;
+      batch.set(db.collection(collectionName).doc(id), docData, { merge: true });
+    }
+    await batch.commit();
+
+    console.log(`✅ Restored ${collectionName}: ${data.length} documents`);
+  }
+}
+```
+
+### Admin Recovery API
+
+```typescript
+// apps/backend/src/routes/admin.ts
+
+// Chỉ admin access (verify admin claim trong Firebase token)
+router.use(adminAuthMiddleware);
+
+// Sync tất cả subscriptions từ Stripe
+router.post('/recovery/stripe-sync', async (req, res) => {
+  const result = await recoverAllSubscriptionsFromStripe();
+  res.json(result);
+});
+
+// Recover 1 user
+router.post('/recovery/user/:userId', async (req, res) => {
+  const result = await recoverUserFromStripe(req.params.userId);
+  res.json(result);
+});
+
+// Restore từ backup
+router.post('/recovery/restore-backup', async (req, res) => {
+  const { date, collections } = req.body;
+  const result = await restoreFromBackup(date, collections);
+  res.json(result);
+});
+
+// Xem audit logs
+router.get('/audit-logs', async (req, res) => {
+  const { userId, action, limit = 100 } = req.query;
+  const logs = await getAuditLogs({ userId, action, limit });
+  res.json({ logs });
+});
+```
+
+### Data Consistency Monitoring
+
+Chạy mỗi giờ để phát hiện data mismatch:
+
+```typescript
+// apps/backend/src/jobs/consistency.ts
+
+export async function checkDataConsistency() {
+  const issues: string[] = [];
+
+  // 1. Pro users không có subscriptionId
+  const proWithoutSub = await db.collection('users')
+    .where('tier', '==', 'pro')
+    .get();
+
+  for (const doc of proWithoutSub.docs) {
+    if (!doc.data().stripeSubscriptionId) {
+      issues.push(`User ${doc.id} has tier=pro but no subscriptionId`);
+    }
+  }
+
+  // 2. Active subscription nhưng tier=free
+  const freeMismatch = await db.collection('users')
+    .where('tier', '==', 'free')
+    .where('subscriptionStatus', '==', 'active')
+    .get();
+
+  if (freeMismatch.size > 0) {
+    issues.push(`${freeMismatch.size} users have active subscription but tier=free`);
+  }
+
+  // Alert nếu có issues
+  if (issues.length > 0) {
+    await sendAlertToSlack('Data Consistency Alert', issues);
+  }
+
+  return { healthy: issues.length === 0, issues };
+}
+```
+
+### Disaster Recovery Procedures
+
+| Scenario | Steps |
+|----------|-------|
+| **1 user mất Pro** | 1. Check audit_logs → 2. Check Stripe Dashboard → 3. `POST /admin/recovery/user/{id}` |
+| **Nhiều user mất Pro** | 1. Check Firestore status → 2. `POST /admin/recovery/stripe-sync` → 3. Notify users |
+| **Firestore bị xóa** | 1. `POST /admin/recovery/restore-backup {date}` → 2. `POST /admin/recovery/stripe-sync` |
+| **Webhook bị miss** | 1. Stripe Dashboard → Webhooks → Resend failed events → 2. Hoặc stripe-sync |
+
+### Backup Retention Policy
+
+| Data | Retention | Storage |
+|------|-----------|---------|
+| Daily backups | 30 ngày | Cloud Storage (Standard) |
+| Weekly backups | 12 tuần | Cloud Storage (Nearline) |
+| Monthly backups | 12 tháng | Cloud Storage (Coldline) |
+| Audit logs | Vĩnh viễn | Firestore |
+
+---
+
 ## Branding Guidelines
 
 **Name:** ToneShift
@@ -709,7 +1003,7 @@ const MAX_TEAM_MEMBERS = 5; // Team tier limit
 
 ---
 
-## Execution Checklist - Phase 1 (21 Tasks)
+## Execution Checklist - Phase 1 (25 Tasks)
 
 ### Setup & Backend (Tasks 1-9)
 - [ ] Task 1: Project Initialization
@@ -735,17 +1029,23 @@ const MAX_TEAM_MEMBERS = 5; // Team tier limit
 - [ ] Task 17: Disposable Email Blocking
 - [ ] Task 18: Firestore Security Rules
 
-### Build & Deploy (Tasks 19-21)
-- [ ] Task 19: Build Configuration
-- [ ] Task 20: Deployment Configuration
-- [ ] Task 21: Security Documentation
+### Backup & Recovery (Tasks 19-22) ⚠️ CRITICAL
+- [ ] Task 19: Audit Logging Service
+- [ ] Task 20: Daily Backup Job (Cloud Scheduler)
+- [ ] Task 21: Recovery Service (Stripe sync + Backup restore)
+- [ ] Task 22: Admin Recovery API + Data Consistency Monitor
+
+### Build & Deploy (Tasks 23-25)
+- [ ] Task 23: Build Configuration
+- [ ] Task 24: Deployment Configuration
+- [ ] Task 25: Security & Recovery Documentation
 
 ## Execution Checklist - Phase 2
 
-- [ ] Task 18: Shared Extension Core
-- [ ] Task 19: Firefox Extension
-- [ ] Task 20: Edge Extension
-- [ ] Task 21: Team Billing
+- [ ] Task 26: Shared Extension Core
+- [ ] Task 27: Firefox Extension
+- [ ] Task 28: Edge Extension
+- [ ] Task 29: Team Billing
 
 ---
 
