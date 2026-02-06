@@ -513,7 +513,7 @@ Request đến
 
 ---
 
-## Task Overview - Phase 1 (27 Tasks)
+## Task Overview - Phase 1 (28 Tasks)
 
 ### Phase 1.1: Project Setup (Tasks 1-2)
 | Task | Mô tả | Files |
@@ -538,41 +538,42 @@ Request đến
 | 10 | **Feedback Analytics** - Dashboard data cho model quality monitoring | `apps/backend/src/services/feedbackAnalytics.ts` |
 | 11 | Stripe payment integration + webhooks | `apps/backend/src/services/stripe.ts`, `apps/backend/src/routes/billing.ts` |
 
-### Phase 1.4: Frontend (Tasks 12-15)
+### Phase 1.4: Frontend (Tasks 12-16)
 | Task | Mô tả | Files |
 |------|-------|-------|
 | 12 | Frontend setup với Vite + React + Tailwind | `apps/web/*` |
 | 13 | Firebase Auth integration (Google sign-in) | `apps/web/src/lib/firebase.ts`, `apps/web/src/stores/authStore.ts` |
 | 14 | API client với token management | `apps/web/src/lib/api.ts` |
 | 15 | Main ToneShift UI với quota display + **feedback form** | `apps/web/src/components/ToneShift.tsx`, `apps/web/src/components/FeedbackForm.tsx` |
+| 16 | **Admin Feedback Dashboard** - Xem feedback, model quality, bug reports | `apps/web/src/pages/admin/FeedbackDashboard.tsx` |
 
-### Phase 1.5: Chrome Extension (Task 16)
+### Phase 1.5: Chrome Extension (Task 17)
 | Task | Mô tả | Files |
 |------|-------|-------|
-| 16 | Chrome extension cho ALL text inputs (context menu + preview dialog với feedback) | `apps/extension/chrome/*` |
+| 17 | Chrome extension cho ALL text inputs (context menu + preview dialog với feedback) | `apps/extension/chrome/*` |
 
-### Phase 1.6: Security Hardening (Tasks 17-20)
+### Phase 1.6: Security Hardening (Tasks 18-21)
 | Task | Mô tả | Files |
 |------|-------|-------|
-| 17 | Prompt injection detection & input validation | `apps/backend/src/services/security/injection.ts` |
-| 18 | Output validation & similarity check | `apps/backend/src/services/security/output.ts` |
-| 19 | Disposable email blocking | `apps/backend/src/services/security/email.ts` |
-| 20 | Firestore security rules | `firestore.rules` |
+| 18 | Prompt injection detection & input validation | `apps/backend/src/services/security/injection.ts` |
+| 19 | Output validation & similarity check | `apps/backend/src/services/security/output.ts` |
+| 20 | Disposable email blocking | `apps/backend/src/services/security/email.ts` |
+| 21 | Firestore security rules | `firestore.rules` |
 
-### Phase 1.7: Backup & Recovery (Tasks 21-24) ⚠️ CRITICAL
+### Phase 1.7: Backup & Recovery (Tasks 22-25) ⚠️ CRITICAL
 | Task | Mô tả | Files |
 |------|-------|-------|
-| 21 | **Audit Logging Service** - Log mọi thay đổi subscription | `apps/backend/src/services/auditLog.ts` |
-| 22 | **Daily Backup Job** - Backup Firestore lên Cloud Storage | `apps/backend/src/jobs/backup.ts` |
-| 23 | **Recovery Service** - Sync từ Stripe + Restore từ backup | `apps/backend/src/services/recovery.ts` |
-| 24 | **Admin Recovery API** + Data Consistency Monitor | `apps/backend/src/routes/admin.ts`, `apps/backend/src/jobs/consistency.ts` |
+| 22 | **Audit Logging Service** - Log mọi thay đổi subscription | `apps/backend/src/services/auditLog.ts` |
+| 23 | **Daily Backup Job** - Backup Firestore lên Cloud Storage | `apps/backend/src/jobs/backup.ts` |
+| 24 | **Recovery Service** - Sync từ Stripe + Restore từ backup | `apps/backend/src/services/recovery.ts` |
+| 25 | **Admin Recovery API** + Data Consistency Monitor | `apps/backend/src/routes/admin.ts`, `apps/backend/src/jobs/consistency.ts` |
 
-### Phase 1.8: Build & Deploy (Tasks 25-27)
+### Phase 1.8: Build & Deploy (Tasks 26-28)
 | Task | Mô tả | Files |
 |------|-------|-------|
-| 25 | Build configuration cho all apps | `package.json`, `apps/*/vite.config.ts` |
-| 26 | Vercel + Cloud Scheduler deployment | `apps/*/vercel.json`, `scheduler.yaml` |
-| 27 | Security & Recovery documentation | `docs/SECURITY.md`, `docs/RECOVERY.md` |
+| 26 | Build configuration cho all apps | `package.json`, `apps/*/vite.config.ts` |
+| 27 | Vercel + Cloud Scheduler deployment | `apps/*/vercel.json`, `scheduler.yaml` |
+| 28 | Security & Recovery documentation | `docs/SECURITY.md`, `docs/RECOVERY.md` |
 
 ---
 
@@ -1117,6 +1118,133 @@ general_feedback/              # Bug reports, feature requests
     source: 'web' | 'extension'
     appVersion: string
     createdAt: timestamp
+```
+
+### Task 16: Admin Feedback Dashboard
+
+Route: `/admin/feedback` (protected bởi admin role check)
+
+**Access control:**
+- Firebase Auth custom claim: `admin: true`
+- Set thủ công qua Firebase Console hoặc admin script
+- Frontend check claim trước khi render, backend validate mọi API call
+
+**Dashboard layout:**
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  ToneShift Admin > Feedback Dashboard                   │
+│                                                         │
+│  Period: [7 days ▼]  Tier: [All ▼]  Tone: [All ▼]     │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐  │
+│  │ Total    │ │ Positive │ │ Negative │ │ Satisf.  │  │
+│  │  1,250   │ │  1,060   │ │   190    │ │   85%    │  │
+│  │ feedbacks│ │  👍       │ │  👎       │ │  rate    │  │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘  │
+│                                                         │
+│  Model Quality              Satisfaction by Tone        │
+│  ┌─────────────────────┐   ┌─────────────────────────┐ │
+│  │ gpt-4.1-nano   76%  │   │ Formal         87% ████ │ │
+│  │ ████████░░░░        │   │ Professional   85% ████ │ │
+│  │                     │   │ Empathetic     83% ████ │ │
+│  │ claude-3-haiku 91%  │   │ Friendly       80% ███░ │ │
+│  │ ██████████░░        │   │ Persuasive     78% ███░ │ │
+│  │                     │   │ Direct         77% ███░ │ │
+│  │ gpt-4o-mini   82%  │   │ Enthusiastic   75% ███░ │ │
+│  │ █████████░░░        │   │ Casual         72% ███░ │ │
+│  └─────────────────────┘   └─────────────────────────┘ │
+│                                                         │
+│  ⚠️ Alerts                                              │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │ ⚠ "casual" tone satisfaction dropped to 72%     │   │
+│  │   (threshold: 75%) — consider improving prompt  │   │
+│  └─────────────────────────────────────────────────┘   │
+│                                                         │
+│  Recent Conversion Feedback          Filter: [All ▼]   │
+│  ┌────────┬────────┬──────┬───────┬────────┐          │
+│  │ Time   │ Rating │ Tone │ Model │ Tier   │          │
+│  ├────────┼────────┼──────┼───────┼────────┤          │
+│  │ 2m ago │  👍    │ form │ nano  │ free   │          │
+│  │ 5m ago │  👎    │ casu │ nano  │ free   │          │
+│  │ 8m ago │  👍    │ prof │ haiku │ pro    │          │
+│  │ 12m ago│  👍    │ form │ haiku │ pro    │          │
+│  └────────┴────────┴──────┴───────┴────────┘          │
+│                                                         │
+│  General Feedback Inbox          [Bug ▼] [Unread ▼]    │
+│  ┌────────┬──────────────┬────────────────────────┐    │
+│  │ Time   │ Type         │ Message                │    │
+│  ├────────┼──────────────┼────────────────────────┤    │
+│  │ 1h ago │ 🐛 Bug       │ Extension không hoạt...│    │
+│  │ 3h ago │ 💡 Feature   │ Thêm tone "Sarcastic" │    │
+│  │ 1d ago │ 👏 Praise    │ Love this tool! Using..│    │
+│  └────────┴──────────────┴────────────────────────┘    │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Components:**
+
+```
+apps/web/src/pages/admin/
+├── FeedbackDashboard.tsx      # Main dashboard page
+├── components/
+│   ├── StatsCards.tsx          # 4 KPI cards (total, positive, negative, rate)
+│   ├── ModelQualityChart.tsx   # Bar chart satisfaction by model
+│   ├── ToneSatisfaction.tsx    # Horizontal bars by tone
+│   ├── AlertsBanner.tsx       # Threshold warnings
+│   ├── ConversionFeedbackTable.tsx  # Recent per-conversion feedback
+│   └── GeneralFeedbackInbox.tsx     # Bug reports, feature requests
+└── hooks/
+    └── useFeedbackData.ts     # Fetch data từ admin API
+```
+
+**Admin API endpoints (thêm vào Task 25):**
+
+```typescript
+// apps/backend/src/routes/admin.ts
+
+// Feedback analytics report
+router.get('/feedback/report', async (req, res) => {
+  const days = parseInt(req.query.days as string) || 7;
+  const report = await generateFeedbackReport(days);
+  res.json(report);
+});
+
+// Recent conversion feedback (paginated)
+router.get('/feedback/recent', async (req, res) => {
+  const { limit = 50, offset = 0, rating, tone, model } = req.query;
+  const db = getFirestore();
+
+  let query = db.collection('feedback')
+    .orderBy('createdAt', 'desc')
+    .limit(Number(limit))
+    .offset(Number(offset));
+
+  if (rating) query = query.where('rating', '==', rating);
+  if (tone) query = query.where('tone', '==', tone);
+  if (model) query = query.where('model', '==', model);
+
+  const snapshot = await query.get();
+  res.json({ feedbacks: snapshot.docs.map(d => ({ id: d.id, ...d.data() })) });
+});
+
+// General feedback inbox (paginated, filterable)
+router.get('/feedback/general', async (req, res) => {
+  const { limit = 50, offset = 0, type } = req.query;
+  const db = getFirestore();
+
+  let query = db.collection('general_feedback')
+    .orderBy('createdAt', 'desc')
+    .limit(Number(limit))
+    .offset(Number(offset));
+
+  if (type) query = query.where('type', '==', type);
+
+  const snapshot = await query.get();
+  res.json({ feedbacks: snapshot.docs.map(d => ({ id: d.id, ...d.data() })) });
+});
 ```
 
 ---
@@ -1900,7 +2028,7 @@ export async function checkDataConsistency() {
 
 ---
 
-## Execution Checklist - Phase 1 (27 Tasks)
+## Execution Checklist - Phase 1 (28 Tasks)
 
 ### Setup & Backend (Tasks 1-11)
 - [ ] Task 1: Project Initialization
@@ -1915,36 +2043,37 @@ export async function checkDataConsistency() {
 - [ ] Task 10: Feedback Analytics (model quality monitoring)
 - [ ] Task 11: Stripe Payment Integration
 
-### Frontend & Extension (Tasks 12-16)
+### Frontend & Extension (Tasks 12-17)
 - [ ] Task 12: Frontend Project Setup
 - [ ] Task 13: Firebase Auth Integration
 - [ ] Task 14: API Client
 - [ ] Task 15: Main ToneShift UI + Feedback Form
-- [ ] Task 16: Chrome Extension (context menu + preview dialog + feedback)
+- [ ] Task 16: Admin Feedback Dashboard ⚠️ IMPORTANT
+- [ ] Task 17: Chrome Extension (context menu + preview dialog + feedback)
 
-### Security Hardening (Tasks 17-20) ⚠️ CRITICAL
-- [ ] Task 17: Prompt Injection Detection
-- [ ] Task 18: Output Validation & Similarity Check
-- [ ] Task 19: Disposable Email Blocking
-- [ ] Task 20: Firestore Security Rules
+### Security Hardening (Tasks 18-21) ⚠️ CRITICAL
+- [ ] Task 18: Prompt Injection Detection
+- [ ] Task 19: Output Validation & Similarity Check
+- [ ] Task 20: Disposable Email Blocking
+- [ ] Task 21: Firestore Security Rules
 
-### Backup & Recovery (Tasks 21-24) ⚠️ CRITICAL
-- [ ] Task 21: Audit Logging Service
-- [ ] Task 22: Daily Backup Job (Cloud Scheduler)
-- [ ] Task 23: Recovery Service (Stripe sync + Backup restore)
-- [ ] Task 24: Admin Recovery API + Data Consistency Monitor
+### Backup & Recovery (Tasks 22-25) ⚠️ CRITICAL
+- [ ] Task 22: Audit Logging Service
+- [ ] Task 23: Daily Backup Job (Cloud Scheduler)
+- [ ] Task 24: Recovery Service (Stripe sync + Backup restore)
+- [ ] Task 25: Admin Recovery API + Data Consistency Monitor
 
-### Build & Deploy (Tasks 25-27)
-- [ ] Task 25: Build Configuration
-- [ ] Task 26: Deployment Configuration
-- [ ] Task 27: Security & Recovery Documentation
+### Build & Deploy (Tasks 26-28)
+- [ ] Task 26: Build Configuration
+- [ ] Task 27: Deployment Configuration
+- [ ] Task 28: Security & Recovery Documentation
 
 ## Execution Checklist - Phase 2
 
-- [ ] Task 28: Shared Extension Core
-- [ ] Task 29: Firefox Extension
-- [ ] Task 30: Edge Extension
-- [ ] Task 31: Team Billing
+- [ ] Task 29: Shared Extension Core
+- [ ] Task 30: Firefox Extension
+- [ ] Task 31: Edge Extension
+- [ ] Task 32: Team Billing
 
 ---
 
