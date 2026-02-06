@@ -272,15 +272,20 @@ Nếu 2% mua Pro:  20,000 × $4.99 = $99,800 → Lãi $97,266
 Nếu 5% mua Pro:  50,000 × $4.99 = $249,500 → Lãi $246,966
 ```
 
-**Khuyến nghị Cost Guard cho 1M users:**
+**Cost Guard tự động scale theo Pro users:**
 
 ```
-Daily budget:    1,000,000 conv/ngày (phục vụ đủ kịch bản B)
-Spending cap:    OpenAI $3,000/tháng (safety net cho kịch bản B)
-Alert threshold: OpenAI $2,000/tháng (cảnh báo sớm)
+Daily budget = 50,000 + (Pro users × 1,000)
+
+0 Pro     → 50K/ngày     → MVP baseline, chi phí ~$105/tháng
+100 Pro   → 150K/ngày    → Revenue $499 funds $315 LLM cost
+500 Pro   → 550K/ngày    → Revenue $2,495 funds $1,155 LLM cost
+1,000 Pro → 1,050K/ngày  → Revenue $4,990 funds $2,205 LLM cost
 ```
 
-**Kết luận:** GPT-4.1 nano đủ rẻ để survive worst case. Chi phí thực tế ~$2,534/tháng cho 1M users. Chỉ cần 0.05% convert sang Pro là hòa vốn.
+> Pro revenue luôn > free tier LLM cost → tự sustain. Không cần tăng thủ công.
+
+**Kết luận:** GPT-4.1 nano đủ rẻ để survive worst case. Chi phí thực tế ~$2,534/tháng cho 1M users. Chỉ cần 0.05% convert sang Pro là hòa vốn. Daily budget tự scale theo revenue — không cần can thiệp thủ công.
 
 ---
 
@@ -355,52 +360,88 @@ Alert threshold: OpenAI $2,000/tháng (cảnh báo sớm)
 ```typescript
 // apps/backend/src/services/costGuard.ts
 
-interface CostGuardConfig {
-  // Spending limits trên LLM provider dashboards
-  openaiMonthlyLimit: number;    // $50 (set trên OpenAI dashboard)
-  anthropicMonthlyLimit: number; // $50 (set trên Anthropic dashboard)
-
-  // Application-level daily budget
-  maxDailyConversions: number;   // 50,000 (tổng tất cả users)
-  maxDailyConversionsFree: number; // 30,000 (chỉ free tier)
-
-  // Per-user abuse detection
+// Per-user abuse detection (cố định)
+interface PerUserLimits {
   maxConversionsPerMinute: number; // 5 (ngay cả Pro users)
   maxInputLength: number;          // 5,000 chars (ngăn input dài tốn token)
 }
 
-const DEFAULT_CONFIG: CostGuardConfig = {
-  openaiMonthlyLimit: 50,
-  anthropicMonthlyLimit: 50,
-  maxDailyConversions: 50_000,
-  maxDailyConversionsFree: 30_000,
+const PER_USER_LIMITS: PerUserLimits = {
   maxConversionsPerMinute: 5,
   maxInputLength: 5_000,
 };
 
-// Đếm tổng conversions/ngày trong Firestore
-// Dùng counter collection (sharded counter để tránh hotspot)
+// Daily budget tự động scale theo số Pro users
+// Logic: revenue từ Pro users fund cho free tier capacity
+//
+// BASE_DAILY_BUDGET: giới hạn khi chưa có Pro user (MVP giai đoạn đầu)
+// CONV_PER_PRO_USER: mỗi Pro user "mở khóa" thêm bao nhiêu free conv/ngày
+//
+// Ví dụ scaling:
+//   0 Pro users   → 50,000 conv/ngày   (MVP baseline)
+//   100 Pro users → 150,000 conv/ngày   ($499/mo revenue funds more capacity)
+//   500 Pro users → 550,000 conv/ngày   ($2,495/mo revenue)
+//   1000 Pro users → 1,050,000 conv/ngày ($4,990/mo revenue)
+//
+// Chi phí 1M free conv/ngày = ~$2,100/tháng (GPT-4.1 nano)
+// Revenue 500 Pro users = $2,495/tháng → đủ cover
+
+const BASE_DAILY_BUDGET = 50_000;        // Baseline khi 0 Pro users
+const CONV_PER_PRO_USER = 1_000;         // Mỗi Pro user mở thêm 1K free conv/ngày
+const MAX_DAILY_BUDGET = 5_000_000;      // Hard cap tránh runaway costs
+
+// Cache Pro user count (refresh mỗi giờ, không query mỗi request)
+let cachedProCount = 0;
+let cacheExpiry = 0;
+
+async function getProUserCount(): Promise<number> {
+  if (Date.now() < cacheExpiry) return cachedProCount;
+
+  const db = getFirestore();
+  const snapshot = await db.collection('users')
+    .where('tier', 'in', ['pro', 'team'])
+    .count()
+    .get();
+
+  cachedProCount = snapshot.data().count;
+  cacheExpiry = Date.now() + 60 * 60 * 1000; // Cache 1 giờ
+  return cachedProCount;
+}
+
+export async function getDailyBudget(): Promise<number> {
+  const proCount = await getProUserCount();
+  const budget = BASE_DAILY_BUDGET + (proCount * CONV_PER_PRO_USER);
+  return Math.min(budget, MAX_DAILY_BUDGET);
+}
+
+// Check daily budget
 export async function checkDailyBudget(): Promise<{
   allowed: boolean;
   totalToday: number;
+  dailyBudget: number;
   reason?: string;
 }> {
   const db = getFirestore();
   const today = new Date().toISOString().split('T')[0];
   const counterRef = db.collection('daily_stats').doc(today);
 
-  const doc = await counterRef.get();
+  const [doc, dailyBudget] = await Promise.all([
+    counterRef.get(),
+    getDailyBudget(),
+  ]);
+
   const totalToday = doc.data()?.totalConversions ?? 0;
 
-  if (totalToday >= DEFAULT_CONFIG.maxDailyConversions) {
+  if (totalToday >= dailyBudget) {
     return {
       allowed: false,
       totalToday,
+      dailyBudget,
       reason: 'daily_budget_exceeded',
     };
   }
 
-  return { allowed: true, totalToday };
+  return { allowed: true, totalToday, dailyBudget };
 }
 
 // Increment counter sau mỗi conversion thành công
@@ -416,19 +457,18 @@ export async function incrementDailyCounter(tier: string) {
 }
 ```
 
-**Provider Dashboard Limits (CRITICAL - set ngay khi tạo account):**
+**Provider Dashboard Limits (tăng theo scale):**
 
 ```
-OpenAI Dashboard:
-  → Settings → Billing → Usage limits
-  → Hard limit: $50/month
-  → Soft limit: $30/month (email alert)
-
-Anthropic Console:
-  → Settings → Spend Limits
-  → Monthly limit: $50
-  → Alert at: $30
+                    MVP (0 Pro)    Growth (500 Pro)   Scale (5K Pro)
+OpenAI hard limit:  $50/month      $3,000/month       $30,000/month
+OpenAI alert:       $30/month      $2,000/month       $20,000/month
+Anthropic limit:    $50/month      $1,000/month       $10,000/month
+Anthropic alert:    $30/month      $500/month         $5,000/month
 ```
+
+> Tăng provider limits thủ công trên dashboard khi Pro user count tăng.
+> Rule of thumb: monthly spending cap = Pro revenue × 50%
 
 **Request Pipeline với Cost Guard:**
 
