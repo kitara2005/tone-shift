@@ -107,15 +107,19 @@ Output: 400 tokens × $0.00000125 = $0.0005
 Total: $0.000625/conversion
 ```
 
-### Profit Margin Analysis (Tiered)
+### Profit Margin Analysis (Tiered, sau Stripe fees)
 
-| Tier | Price | Model | Conv/mo | API Cost | Profit | Margin |
-|------|-------|-------|---------|----------|--------|--------|
-| FREE | $0 | nano | 300 | $0.02 | -$0.02 | Loss (CAC) |
-| PRO | $4.99 | Claude | 1,500 | $0.94 | $4.05 | **81%** ✅ |
-| PRO | $4.99 | Claude | 600 | $0.38 | $4.61 | **92%** ✅ |
-| TEAM | $13.99 | Claude | 7,500 | $4.69 | $9.30 | **66%** ✅ |
-| TEAM | $13.99 | Claude | 3,000 | $1.88 | $12.11 | **87%** ✅ |
+| Tier | Price | Stripe Fee | Net Revenue | Model | Conv/mo | API Cost | Profit | Margin |
+|------|-------|-----------|-------------|-------|---------|----------|--------|--------|
+| FREE | $0 | $0 | $0 | nano | 300 | $0.02 | -$0.02 | Loss (CAC) |
+| PRO | $4.99 | $0.45 | $4.54 | Claude | 1,500 | $0.94 | $3.60 | **72%** ✅ |
+| PRO | $4.99 | $0.45 | $4.54 | Claude | 600 | $0.38 | $4.16 | **84%** ✅ |
+| TEAM | $13.99 | $0.71 | $13.28 | Claude | 7,500 | $4.69 | $8.59 | **61%** ✅ |
+| TEAM | $13.99 | $0.71 | $13.28 | Claude | 3,000 | $1.88 | $11.40 | **82%** ✅ |
+
+*Stripe fee: 2.9% + $0.30 per transaction
+*PRO: $4.99 × 2.9% + $0.30 = $0.45 → net $4.54
+*TEAM: $13.99 × 2.9% + $0.30 = $0.71 → net $13.28
 
 **So sánh với single-model approach:**
 | Strategy | 1.2M conv/mo | Quality |
@@ -152,8 +156,9 @@ LLM_PRO_FALLBACK_MODEL=gpt-4o-mini
 | Service | Free Tier | Paid Plan |
 |---------|-----------|-----------|
 | **Vercel** | 150K functions (personal only) | $20/mo Pro |
-| **Firebase Auth** | 50K MAU | $0.0055/MAU |
-| **Firestore** | 50K reads, 20K writes/day | $0.18/100K ops |
+| **Firebase Auth** | FREE unlimited (email/Google sign-in) | $0.0055/MAU (chỉ khi dùng Identity Platform) |
+| **Firestore reads** | 50K reads/day | $0.06/100K reads |
+| **Firestore writes** | 20K writes/day | $0.18/100K writes |
 | **Stripe** | - | 2.9% + $0.30/transaction |
 | **Chrome Store** | - | $5 one-time |
 | **Firefox/Edge** | Free | Free |
@@ -169,20 +174,23 @@ LLM_PRO_FALLBACK_MODEL=gpt-4o-mini
 
 ### Monthly Cost by Scale (Tiered Model)
 
-| Scale | Free | Paid | Vercel | Firebase | LLM API* | Stripe | Total | Revenue | Margin |
-|-------|------|------|--------|----------|----------|--------|-------|---------|--------|
-| Launch | 1K | 100 | $20 | $0 | $23 | $15 | **$58** | $499 | **88%** |
-| Growth | 10K | 1K | $35 | $20 | $180 | $150 | **$385** | $4,990 | **92%** |
-| Scale | 100K | 10K | $150 | $200 | $650 | $1,500 | **$2,500** | $49,900 | **95%** |
+| Scale | Free | Paid | Vercel | Firebase Auth | Firestore | LLM API* | Stripe** | Total Cost | Revenue*** | Net Profit | Margin |
+|-------|------|------|--------|---------------|-----------|----------|----------|------------|------------|------------|--------|
+| Launch | 1K | 100 | $20 | $0 | $0 | $23 | $45 | **$88** | $454 | **$366** | **81%** |
+| Growth | 10K | 1K | $35 | $0 | $15 | $180 | $449 | **$679** | $4,541 | **$3,862** | **85%** |
+| Scale | 100K | 10K | $150 | $0 | $180 | $650 | $4,490 | **$5,470** | $45,410 | **$39,940** | **88%** |
 
 *LLM API = GPT-4.1 nano (Free) + Claude 3 Haiku (Pro/Team)
+**Stripe = 2.9% + $0.30 per transaction. Ví dụ: $4.99 → fee $0.45 → net $4.54
+***Revenue = sau khi trừ Stripe fees
 
-### Cost Breakdown (at scale)
+### Cost Breakdown (at scale - 100K free, 10K paid)
 
 ```
-LLM API:       ~26% of costs (optimized with tiered models)
-Stripe fees:   ~60% of costs (largest at scale)
-Infra:         ~14% of costs
+Stripe fees:   ~82% of costs ($4,490) ← largest cost, unavoidable
+LLM API:       ~12% of costs ($650)   ← optimized with tiered models
+Infra:         ~6% of costs ($330)    ← Vercel + Firestore
+Firebase Auth: ~0% ($0)              ← free for email/Google
 ```
 
 ### Tiered Model Cost Projection (1,600 users)
@@ -258,18 +266,18 @@ Max: 50,000/ngày × 30 = 1,500,000 conv/tháng
 | **B: Thực tế** | **30M** | **$2,534** | **Survivable** |
 | C: Cost Guard | 1.5M | $140 | UX tệ |
 
-**Break-even analysis (chỉ cần bao nhiêu % convert Pro để hòa vốn):**
+**Break-even analysis (sau Stripe fees, chỉ cần bao nhiêu % convert Pro để hòa vốn):**
 
 ```
 Kịch bản B chi phí: $2,534/tháng
-1 Pro user = $4.99/tháng
+1 Pro user = $4.99 - $0.45 Stripe fee = $4.54 net/tháng
 
-Break-even: $2,534 / $4.99 = 508 Pro users
-→ Chỉ cần 0.05% của 1M free users mua Pro = HÒA VỐN
+Break-even: $2,534 / $4.54 = 558 Pro users
+→ Chỉ cần 0.056% của 1M free users mua Pro = HÒA VỐN
 
-Nếu 1% mua Pro:  10,000 × $4.99 = $49,900 → Lãi $47,366
-Nếu 2% mua Pro:  20,000 × $4.99 = $99,800 → Lãi $97,266
-Nếu 5% mua Pro:  50,000 × $4.99 = $249,500 → Lãi $246,966
+Nếu 1% mua Pro:  10,000 × $4.54 = $45,400 net → Lãi $42,866
+Nếu 2% mua Pro:  20,000 × $4.54 = $90,800 net → Lãi $88,266
+Nếu 5% mua Pro:  50,000 × $4.54 = $227,000 net → Lãi $224,466
 ```
 
 **Cost Guard tự động scale theo Pro users:**
@@ -579,7 +587,7 @@ Request đến
 
 ## Security Implementation Details
 
-### Task 15: Prompt Injection Detection
+### Task 18: Prompt Injection Detection
 
 ```typescript
 // apps/backend/src/services/security/injection.ts
@@ -665,7 +673,7 @@ export function escapeForLLM(text: string): string {
 }
 ```
 
-### Task 16: Output Validation
+### Task 19: Output Validation
 
 ```typescript
 // apps/backend/src/services/security/output.ts
@@ -706,7 +714,7 @@ function calculateSimilarity(a: string, b: string): number {
 }
 ```
 
-### Task 17: Disposable Email Blocking
+### Task 20: Disposable Email Blocking
 
 ```typescript
 // apps/backend/src/services/security/email.ts
@@ -746,7 +754,7 @@ export function validateEmail(email: string): {
 }
 ```
 
-### Task 18: Firestore Security Rules
+### Task 21: Firestore Security Rules
 
 ```javascript
 // firestore.rules
@@ -1253,10 +1261,10 @@ router.get('/feedback/general', async (req, res) => {
 
 | Task | Mô tả | Files |
 |------|-------|-------|
-| 22 | Shared extension core (browser-agnostic) | `packages/extension-core/*` |
-| 23 | Firefox extension adaptation | `apps/extension/firefox/*` |
-| 24 | Edge extension adaptation | `apps/extension/edge/*` |
-| 25 | Team billing & shared workspace | `apps/backend/src/services/team.ts` |
+| 29 | Shared extension core (browser-agnostic) | `packages/extension-core/*` |
+| 30 | Firefox extension adaptation | `apps/extension/firefox/*` |
+| 31 | Edge extension adaptation | `apps/extension/edge/*` |
+| 32 | Team billing & shared workspace | `apps/backend/src/services/team.ts` |
 
 ---
 
@@ -1734,7 +1742,9 @@ const MAX_TEAM_MEMBERS = 5; // Team tier limit
 | `users/{userId}` (tier, subscription) | 🔴 CRITICAL | Mất tiền/User | Stripe API |
 | `audit_logs` | 🔴 CRITICAL | Mất audit trail | Daily backup |
 | `conversions` | 🟡 IMPORTANT | Mất history | Daily backup |
-| `feedback` | 🟡 IMPORTANT | Mất analytics | Daily backup |
+| `feedback` | 🟡 IMPORTANT | Mất model quality data | Daily backup |
+| `general_feedback` | 🟡 IMPORTANT | Mất bug reports/feature requests | Daily backup |
+| `daily_stats` | 🟢 LOW | Cost tracking, tự rebuild | Daily backup |
 | `dailyUsage` | 🟢 LOW | Reset hàng ngày | Không cần |
 
 ### Audit Logging (Transaction Logs)
@@ -1784,7 +1794,7 @@ Backup toàn bộ critical collections lên Cloud Storage mỗi ngày:
 import { Storage } from '@google-cloud/storage';
 
 const BACKUP_BUCKET = 'toneshift-backups';
-const BACKUP_COLLECTIONS = ['users', 'audit_logs', 'conversions', 'feedback'];
+const BACKUP_COLLECTIONS = ['users', 'audit_logs', 'conversions', 'feedback', 'general_feedback', 'daily_stats'];
 
 export async function backupFirestore() {
   const db = getFirestore();
@@ -1814,7 +1824,9 @@ gs://toneshift-backups/
 │   ├── users.json
 │   ├── audit_logs.json
 │   ├── conversions.json
-│   └── feedback.json
+│   ├── feedback.json
+│   ├── general_feedback.json
+│   └── daily_stats.json
 ├── 2026-02-05/
 └── ... (giữ 30 ngày)
 ```
