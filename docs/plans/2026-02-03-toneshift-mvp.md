@@ -246,6 +246,125 @@ Infra:         ~14% of costs
 - Always validate ownership trong backend code
 - No direct document ID exposure trong API
 
+### Vấn đề 7: DDoS & Economic Attack (NEW)
+**Rủi ro 1:** DDoS truyền thống - flood requests để hạ server
+**Rủi ro 2:** Economic DDoS - tạo nhiều requests hợp lệ để đốt chi phí LLM API
+
+**Giải pháp 3 lớp:**
+
+**Lớp 1: Infrastructure (tự động, không cần code)**
+- Vercel Edge Network tự chặn DDoS L3/L4 (network flood)
+- Firebase Auth tự bảo vệ auth endpoints (Google infrastructure)
+- Vercel auto-scaling xử lý traffic spikes
+
+**Lớp 2: Application-level (Task 6 - Rate Limiting)**
+- Block requests không có auth token hoàn toàn (zero tolerance cho unauthenticated)
+- IP rate limit: max 30 requests/phút per IP (trước auth check)
+- User rate limit: max 20 requests/phút per userId (sau auth check)
+- Sliding window algorithm (chống burst attack)
+- Block IP sau 5 failed auth attempts trong 15 phút
+
+**Lớp 3: Cost Protection (NEW - thêm vào Task 6)**
+
+```typescript
+// apps/backend/src/services/costGuard.ts
+
+interface CostGuardConfig {
+  // Spending limits trên LLM provider dashboards
+  openaiMonthlyLimit: number;    // $50 (set trên OpenAI dashboard)
+  anthropicMonthlyLimit: number; // $50 (set trên Anthropic dashboard)
+
+  // Application-level daily budget
+  maxDailyConversions: number;   // 50,000 (tổng tất cả users)
+  maxDailyConversionsFree: number; // 30,000 (chỉ free tier)
+
+  // Per-user abuse detection
+  maxConversionsPerMinute: number; // 5 (ngay cả Pro users)
+  maxInputLength: number;          // 5,000 chars (ngăn input dài tốn token)
+}
+
+const DEFAULT_CONFIG: CostGuardConfig = {
+  openaiMonthlyLimit: 50,
+  anthropicMonthlyLimit: 50,
+  maxDailyConversions: 50_000,
+  maxDailyConversionsFree: 30_000,
+  maxConversionsPerMinute: 5,
+  maxInputLength: 5_000,
+};
+
+// Đếm tổng conversions/ngày trong Firestore
+// Dùng counter collection (sharded counter để tránh hotspot)
+export async function checkDailyBudget(): Promise<{
+  allowed: boolean;
+  totalToday: number;
+  reason?: string;
+}> {
+  const db = getFirestore();
+  const today = new Date().toISOString().split('T')[0];
+  const counterRef = db.collection('daily_stats').doc(today);
+
+  const doc = await counterRef.get();
+  const totalToday = doc.data()?.totalConversions ?? 0;
+
+  if (totalToday >= DEFAULT_CONFIG.maxDailyConversions) {
+    return {
+      allowed: false,
+      totalToday,
+      reason: 'daily_budget_exceeded',
+    };
+  }
+
+  return { allowed: true, totalToday };
+}
+
+// Increment counter sau mỗi conversion thành công
+export async function incrementDailyCounter(tier: string) {
+  const db = getFirestore();
+  const today = new Date().toISOString().split('T')[0];
+
+  await db.collection('daily_stats').doc(today).set({
+    totalConversions: FieldValue.increment(1),
+    [`${tier}Conversions`]: FieldValue.increment(1),
+    lastUpdated: FieldValue.serverTimestamp(),
+  }, { merge: true });
+}
+```
+
+**Provider Dashboard Limits (CRITICAL - set ngay khi tạo account):**
+
+```
+OpenAI Dashboard:
+  → Settings → Billing → Usage limits
+  → Hard limit: $50/month
+  → Soft limit: $30/month (email alert)
+
+Anthropic Console:
+  → Settings → Spend Limits
+  → Monthly limit: $50
+  → Alert at: $30
+```
+
+**Request Pipeline với Cost Guard:**
+
+```
+Request đến
+  │
+  ├─ 1. IP rate limit (30/min)          → Block nếu vượt
+  ├─ 2. Auth token check                → Block nếu không có/invalid
+  ├─ 3. User rate limit (20/min)        → Block nếu vượt
+  ├─ 4. Input length check (≤5000 chars) → Block nếu quá dài
+  ├─ 5. Per-user burst check (5/min)    → Block nếu spam
+  ├─ 6. Daily budget check              → Block nếu vượt ngân sách
+  ├─ 7. Quota check (free: 10/day)      → Block nếu hết quota
+  ├─ 8. Sanitize + escape input         → Clean input
+  ├─ 9. Prompt injection detection      → Block nếu phát hiện
+  ├─ 10. Gọi LLM                        → Convert text
+  ├─ 11. Output validation              → Block nếu output bất thường
+  ├─ 12. Increment daily counter        → Track chi phí
+  │
+  └─ Trả kết quả cho user
+```
+
 ---
 
 ## Development Phases
@@ -1049,6 +1168,8 @@ const MAX_TEAM_MEMBERS = 5; // Team tier limit
 | **LLM proxy abuse** | **HIGH** | Output similarity check + length validation + code detection |
 | **IDOR (data access)** | **HIGH** | Firestore rules + ownership validation |
 | **Payment fraud** | MEDIUM | Stripe Radar + delayed activation + refund tracking |
+| **DDoS (network flood)** | **MEDIUM** | Vercel Edge Network auto-protection |
+| **DDoS (economic/cost)** | **HIGH** | Provider spending caps + daily budget + input length limit + per-user burst limit |
 
 ---
 
