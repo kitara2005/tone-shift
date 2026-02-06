@@ -196,6 +196,92 @@ Infra:         ~14% of costs
 
 **Kết luận:** Tiered model giúp giảm 22% chi phí so với all-Claude, trong khi vẫn giữ quality cho paying users.
 
+### Stress Test: 1M Free Users, 0 Revenue (Worst Case)
+
+Giả sử tháng đầu có 1 triệu free users, không ai mua Pro.
+
+**Kịch bản A: Tệ nhất tuyệt đối (100% users dùng max 10/ngày)**
+
+```
+Conversions: 1,000,000 × 10/ngày × 30 ngày = 300,000,000 conv/tháng
+```
+
+| Dịch vụ | Cách tính | Chi phí/tháng |
+|---------|-----------|---------------|
+| LLM (GPT-4.1 nano) | 300M × $0.00007 | **$21,000** |
+| Firebase Auth | 1M MAU, basic plan (email/Google) = FREE | **$0** |
+| Firestore reads | 300M × 2 reads = 600M × $0.06/100K | **$360** |
+| Firestore writes | 300M × 2 writes = 600M × $0.18/100K | **$1,080** |
+| Vercel | ~15,000 GB-Hours serverless | **~$2,600** |
+| Domain | - | **$1** |
+| Stripe | $0 revenue = $0 fees | **$0** |
+| **TOTAL** | | **~$25,041/tháng** |
+
+> Gần như không thể xảy ra — không bao giờ 100% users dùng max mỗi ngày.
+
+**Kịch bản B: Thực tế (20% DAU, trung bình 5 conv/ngày)**
+
+```
+DAU: 1,000,000 × 20% = 200,000 active users/ngày
+Conversions: 200,000 × 5 × 30 = 30,000,000 conv/tháng
+```
+
+| Dịch vụ | Cách tính | Chi phí/tháng |
+|---------|-----------|---------------|
+| LLM (GPT-4.1 nano) | 30M × $0.00007 | **$2,100** |
+| Firebase Auth | Free | **$0** |
+| Firestore | 60M reads ($36) + 60M writes ($108) | **$144** |
+| Vercel | ~1,500 GB-Hours | **~$290** |
+| **TOTAL** | | **~$2,534/tháng** |
+
+**Kịch bản C: Có Cost Guard (daily budget 50K conv/ngày)**
+
+```
+Max: 50,000/ngày × 30 = 1,500,000 conv/tháng
+→ Phần lớn users bị từ chối khi hệ thống đạt giới hạn
+```
+
+| Dịch vụ | Cách tính | Chi phí/tháng |
+|---------|-----------|---------------|
+| LLM | 1.5M × $0.00007 | **$105** |
+| Firebase Auth | Free | **$0** |
+| Firestore + Vercel | Minimal | **~$35** |
+| **TOTAL** | | **~$140/tháng** |
+
+> Rẻ nhưng UX tệ — 1M users mà chỉ serve 50K conv/ngày.
+
+**So sánh 3 kịch bản:**
+
+| Kịch bản | Conv/tháng | Chi phí | Rủi ro |
+|----------|-----------|---------|--------|
+| A: Max lý thuyết | 300M | $25,041 | Không xảy ra |
+| **B: Thực tế** | **30M** | **$2,534** | **Survivable** |
+| C: Cost Guard | 1.5M | $140 | UX tệ |
+
+**Break-even analysis (chỉ cần bao nhiêu % convert Pro để hòa vốn):**
+
+```
+Kịch bản B chi phí: $2,534/tháng
+1 Pro user = $4.99/tháng
+
+Break-even: $2,534 / $4.99 = 508 Pro users
+→ Chỉ cần 0.05% của 1M free users mua Pro = HÒA VỐN
+
+Nếu 1% mua Pro:  10,000 × $4.99 = $49,900 → Lãi $47,366
+Nếu 2% mua Pro:  20,000 × $4.99 = $99,800 → Lãi $97,266
+Nếu 5% mua Pro:  50,000 × $4.99 = $249,500 → Lãi $246,966
+```
+
+**Khuyến nghị Cost Guard cho 1M users:**
+
+```
+Daily budget:    1,000,000 conv/ngày (phục vụ đủ kịch bản B)
+Spending cap:    OpenAI $3,000/tháng (safety net cho kịch bản B)
+Alert threshold: OpenAI $2,000/tháng (cảnh báo sớm)
+```
+
+**Kết luận:** GPT-4.1 nano đủ rẻ để survive worst case. Chi phí thực tế ~$2,534/tháng cho 1M users. Chỉ cần 0.05% convert sang Pro là hòa vốn.
+
 ---
 
 ## Security Architecture
