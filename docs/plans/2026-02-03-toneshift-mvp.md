@@ -513,7 +513,7 @@ Request đến
 
 ---
 
-## Task Overview - Phase 1 (25 Tasks)
+## Task Overview - Phase 1 (27 Tasks)
 
 ### Phase 1.1: Project Setup (Tasks 1-2)
 | Task | Mô tả | Files |
@@ -529,48 +529,50 @@ Request đến
 | 5 | **Quota Service với atomic Firestore transactions** | `apps/backend/src/services/quota.ts` |
 | 6 | Rate limiting middleware (IP + user based) | `apps/backend/src/middleware/rateLimit.ts` |
 
-### Phase 1.3: Core Features (Tasks 7-9)
+### Phase 1.3: Core Features (Tasks 7-11)
 | Task | Mô tả | Files |
 |------|-------|-------|
 | 7 | Tiered LLM Service (GPT-4.1 nano + Claude 3 Haiku) | `apps/backend/src/services/llm/*` |
 | 8 | Conversion API endpoint với quota check | `apps/backend/src/routes/convert.ts` |
-| 9 | Stripe payment integration + webhooks | `apps/backend/src/services/stripe.ts`, `apps/backend/src/routes/billing.ts` |
+| 9 | **Feedback Service** - Per-conversion rating + general feedback | `apps/backend/src/services/feedback.ts`, `apps/backend/src/routes/feedback.ts` |
+| 10 | **Feedback Analytics** - Dashboard data cho model quality monitoring | `apps/backend/src/services/feedbackAnalytics.ts` |
+| 11 | Stripe payment integration + webhooks | `apps/backend/src/services/stripe.ts`, `apps/backend/src/routes/billing.ts` |
 
-### Phase 1.4: Frontend (Tasks 10-13)
+### Phase 1.4: Frontend (Tasks 12-15)
 | Task | Mô tả | Files |
 |------|-------|-------|
-| 10 | Frontend setup với Vite + React + Tailwind | `apps/web/*` |
-| 11 | Firebase Auth integration (Google sign-in) | `apps/web/src/lib/firebase.ts`, `apps/web/src/stores/authStore.ts` |
-| 12 | API client với token management | `apps/web/src/lib/api.ts` |
-| 13 | Main ToneShift UI với quota display | `apps/web/src/components/ToneShift.tsx` |
+| 12 | Frontend setup với Vite + React + Tailwind | `apps/web/*` |
+| 13 | Firebase Auth integration (Google sign-in) | `apps/web/src/lib/firebase.ts`, `apps/web/src/stores/authStore.ts` |
+| 14 | API client với token management | `apps/web/src/lib/api.ts` |
+| 15 | Main ToneShift UI với quota display + **feedback form** | `apps/web/src/components/ToneShift.tsx`, `apps/web/src/components/FeedbackForm.tsx` |
 
-### Phase 1.5: Chrome Extension (Task 14)
+### Phase 1.5: Chrome Extension (Task 16)
 | Task | Mô tả | Files |
 |------|-------|-------|
-| 14 | Chrome extension cho ALL text inputs | `apps/extension/chrome/*` |
+| 16 | Chrome extension cho ALL text inputs (context menu + preview dialog với feedback) | `apps/extension/chrome/*` |
 
-### Phase 1.6: Security Hardening (Tasks 15-18)
+### Phase 1.6: Security Hardening (Tasks 17-20)
 | Task | Mô tả | Files |
 |------|-------|-------|
-| 15 | Prompt injection detection & input validation | `apps/backend/src/services/security/injection.ts` |
-| 16 | Output validation & similarity check | `apps/backend/src/services/security/output.ts` |
-| 17 | Disposable email blocking | `apps/backend/src/services/security/email.ts` |
-| 18 | Firestore security rules | `firestore.rules` |
+| 17 | Prompt injection detection & input validation | `apps/backend/src/services/security/injection.ts` |
+| 18 | Output validation & similarity check | `apps/backend/src/services/security/output.ts` |
+| 19 | Disposable email blocking | `apps/backend/src/services/security/email.ts` |
+| 20 | Firestore security rules | `firestore.rules` |
 
-### Phase 1.7: Backup & Recovery (Tasks 19-22) ⚠️ CRITICAL
+### Phase 1.7: Backup & Recovery (Tasks 21-24) ⚠️ CRITICAL
 | Task | Mô tả | Files |
 |------|-------|-------|
-| 19 | **Audit Logging Service** - Log mọi thay đổi subscription | `apps/backend/src/services/auditLog.ts` |
-| 20 | **Daily Backup Job** - Backup Firestore lên Cloud Storage | `apps/backend/src/jobs/backup.ts` |
-| 21 | **Recovery Service** - Sync từ Stripe + Restore từ backup | `apps/backend/src/services/recovery.ts` |
-| 22 | **Admin Recovery API** + Data Consistency Monitor | `apps/backend/src/routes/admin.ts`, `apps/backend/src/jobs/consistency.ts` |
+| 21 | **Audit Logging Service** - Log mọi thay đổi subscription | `apps/backend/src/services/auditLog.ts` |
+| 22 | **Daily Backup Job** - Backup Firestore lên Cloud Storage | `apps/backend/src/jobs/backup.ts` |
+| 23 | **Recovery Service** - Sync từ Stripe + Restore từ backup | `apps/backend/src/services/recovery.ts` |
+| 24 | **Admin Recovery API** + Data Consistency Monitor | `apps/backend/src/routes/admin.ts`, `apps/backend/src/jobs/consistency.ts` |
 
-### Phase 1.8: Build & Deploy (Tasks 23-25)
+### Phase 1.8: Build & Deploy (Tasks 25-27)
 | Task | Mô tả | Files |
 |------|-------|-------|
-| 23 | Build configuration cho all apps | `package.json`, `apps/*/vite.config.ts` |
-| 24 | Vercel + Cloud Scheduler deployment | `apps/*/vercel.json`, `scheduler.yaml` |
-| 25 | Security & Recovery documentation | `docs/SECURITY.md`, `docs/RECOVERY.md` |
+| 25 | Build configuration cho all apps | `package.json`, `apps/*/vite.config.ts` |
+| 26 | Vercel + Cloud Scheduler deployment | `apps/*/vercel.json`, `scheduler.yaml` |
+| 27 | Security & Recovery documentation | `docs/SECURITY.md`, `docs/RECOVERY.md` |
 
 ---
 
@@ -879,6 +881,246 @@ User text (raw)
 
 ---
 
+## Feedback System Implementation
+
+### Task 9: Feedback Service
+
+**2 loại feedback:**
+
+```typescript
+// apps/backend/src/services/feedback.ts
+
+// 1. Per-conversion feedback (thumbs up/down trong preview dialog)
+interface ConversionFeedback {
+  id: string;
+  userId: string;
+  conversionId: string;       // Link tới conversion record
+  rating: 'positive' | 'negative';
+  tone: string;               // Tone đã dùng
+  model: string;              // Model đã dùng (nano, haiku, 4o-mini)
+  tier: string;               // User tier khi feedback (free, pro, team)
+  createdAt: Date;
+}
+
+// 2. General feedback (form trong web app / extension popup)
+interface GeneralFeedback {
+  id: string;
+  userId: string;
+  type: 'bug' | 'feature_request' | 'complaint' | 'praise' | 'other';
+  message: string;            // Max 2000 chars
+  source: 'web' | 'extension';
+  appVersion: string;
+  createdAt: Date;
+}
+
+export async function submitConversionFeedback(
+  userId: string,
+  data: { conversionId: string; rating: 'positive' | 'negative' }
+) {
+  const db = getFirestore();
+
+  // Lấy conversion record để biết tone, model, tier
+  const convDoc = await db.collection('conversions').doc(data.conversionId).get();
+  if (!convDoc.exists || convDoc.data()?.userId !== userId) {
+    throw new Error('Conversion not found');
+  }
+
+  const conv = convDoc.data()!;
+
+  await db.collection('feedback').add({
+    userId,
+    conversionId: data.conversionId,
+    rating: data.rating,
+    tone: conv.tone,
+    model: conv.model,
+    tier: conv.tier,
+    createdAt: FieldValue.serverTimestamp(),
+  });
+}
+
+export async function submitGeneralFeedback(
+  userId: string,
+  data: { type: string; message: string; source: string; appVersion: string }
+) {
+  const db = getFirestore();
+
+  // Validate
+  if (data.message.length > 2000) {
+    throw new Error('Message too long (max 2000 chars)');
+  }
+
+  await db.collection('general_feedback').add({
+    userId,
+    type: data.type,
+    message: data.message,
+    source: data.source,
+    appVersion: data.appVersion,
+    createdAt: FieldValue.serverTimestamp(),
+  });
+}
+```
+
+### Feedback API Endpoints
+
+```typescript
+// apps/backend/src/routes/feedback.ts
+
+import { authMiddleware } from '../middleware/auth';
+
+const router = express.Router();
+router.use(authMiddleware);
+
+// Per-conversion feedback (from preview dialog)
+router.post('/conversion', async (req, res) => {
+  const { conversionId, rating } = req.body;
+
+  if (!['positive', 'negative'].includes(rating)) {
+    return res.status(400).json({ error: 'Invalid rating' });
+  }
+
+  await submitConversionFeedback(req.user.uid, { conversionId, rating });
+  res.json({ success: true });
+});
+
+// General feedback (from web app / extension popup)
+router.post('/general', async (req, res) => {
+  const { type, message, source, appVersion } = req.body;
+
+  const validTypes = ['bug', 'feature_request', 'complaint', 'praise', 'other'];
+  if (!validTypes.includes(type)) {
+    return res.status(400).json({ error: 'Invalid type' });
+  }
+
+  await submitGeneralFeedback(req.user.uid, { type, message, source, appVersion });
+  res.json({ success: true });
+});
+```
+
+### Task 10: Feedback Analytics
+
+Tổng hợp feedback data để monitor model quality và guide decisions:
+
+```typescript
+// apps/backend/src/services/feedbackAnalytics.ts
+
+// Chạy daily (Cloud Scheduler) hoặc on-demand từ admin API
+export async function generateFeedbackReport(days: number = 7) {
+  const db = getFirestore();
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+  const feedbacks = await db.collection('feedback')
+    .where('createdAt', '>=', since)
+    .get();
+
+  // Tổng hợp theo model
+  const byModel: Record<string, { positive: number; negative: number }> = {};
+  // Tổng hợp theo tone
+  const byTone: Record<string, { positive: number; negative: number }> = {};
+  // Tổng hợp theo tier
+  const byTier: Record<string, { positive: number; negative: number }> = {};
+
+  for (const doc of feedbacks.docs) {
+    const data = doc.data();
+    const { model, tone, tier, rating } = data;
+
+    for (const [key, group] of [
+      [model, byModel], [tone, byTone], [tier, byTier],
+    ] as const) {
+      if (!group[key]) group[key] = { positive: 0, negative: 0 };
+      group[key][rating]++;
+    }
+  }
+
+  // Tính satisfaction rate
+  const calcRate = (g: { positive: number; negative: number }) =>
+    g.positive + g.negative > 0
+      ? Math.round((g.positive / (g.positive + g.negative)) * 100)
+      : 0;
+
+  return {
+    period: `${days} days`,
+    totalFeedbacks: feedbacks.size,
+    byModel: Object.fromEntries(
+      Object.entries(byModel).map(([k, v]) => [k, { ...v, satisfactionRate: calcRate(v) }])
+    ),
+    byTone: Object.fromEntries(
+      Object.entries(byTone).map(([k, v]) => [k, { ...v, satisfactionRate: calcRate(v) }])
+    ),
+    byTier: Object.fromEntries(
+      Object.entries(byTier).map(([k, v]) => [k, { ...v, satisfactionRate: calcRate(v) }])
+    ),
+  };
+}
+
+// Ví dụ output:
+// {
+//   period: "7 days",
+//   totalFeedbacks: 1250,
+//   byModel: {
+//     "gpt-4.1-nano": { positive: 380, negative: 120, satisfactionRate: 76 },
+//     "claude-3-haiku": { positive: 680, negative: 70, satisfactionRate: 91 },
+//   },
+//   byTone: {
+//     "formal": { positive: 200, negative: 30, satisfactionRate: 87 },
+//     "casual": { positive: 180, negative: 50, satisfactionRate: 78 },
+//   },
+//   byTier: {
+//     "free": { positive: 400, negative: 150, satisfactionRate: 73 },
+//     "pro":  { positive: 650, negative: 50, satisfactionRate: 93 },
+//   },
+// }
+```
+
+**Decision triggers từ feedback data:**
+
+| Metric | Threshold | Action |
+|--------|-----------|--------|
+| nano satisfaction < 60% | 2 tuần liên tiếp | Upgrade free tier lên GPT-4o-mini |
+| nano satisfaction < 40% | 1 tuần | Emergency upgrade |
+| Haiku satisfaction < 80% | 2 tuần liên tiếp | Investigate prompt quality |
+| Specific tone < 50% | 1 tuần | Improve prompt cho tone đó |
+| General feedback > 10 bugs/ngày | Immediate | Prioritize bug fixes |
+
+### General Feedback Form (Web App)
+
+```typescript
+// apps/web/src/components/FeedbackForm.tsx
+
+// Hiện từ footer hoặc menu "Send Feedback"
+// Form đơn giản:
+//   - Type: dropdown (Bug, Feature Request, Complaint, Praise, Other)
+//   - Message: textarea (max 2000 chars)
+//   - Submit button
+//
+// Extension popup cũng có link "Send Feedback" mở form tương tự
+// Source field tự động set: 'web' hoặc 'extension'
+```
+
+### Firestore Collections
+
+```
+feedback/                      # Per-conversion feedback
+  {feedbackId}/
+    userId: string
+    conversionId: string
+    rating: 'positive' | 'negative'
+    tone: string
+    model: string
+    tier: string
+    createdAt: timestamp
+
+general_feedback/              # Bug reports, feature requests
+  {feedbackId}/
+    userId: string
+    type: 'bug' | 'feature_request' | 'complaint' | 'praise' | 'other'
+    message: string
+    source: 'web' | 'extension'
+    appVersion: string
+    createdAt: timestamp
+```
+
+---
+
 ## Task Overview - Phase 2: Multi-Browser (4 Tasks)
 
 | Task | Mô tả | Files |
@@ -919,10 +1161,13 @@ User text (raw)
    │   that file at your earliest    │
    │   convenience?"                 │
    │                                 │
+   │  How was this?  [👍] [👎]       │
+   │                                 │
    │         [Cancel]  [Apply ✓]     │
    └─────────────────────────────────┘
 6. User click [Apply] → text được replace
    User click [Cancel] hoặc Esc → đóng dialog, giữ text gốc
+   User click [👍/👎] → gửi feedback async (không block Apply)
 ```
 
 ### Tại sao Context Menu thay vì Injected Button?
@@ -1055,6 +1300,13 @@ function createPreviewDialog(tone: string, originalText: string): HTMLElement {
       cursor: pointer; border: none; }
     .toneshift-btn-cancel { background: #f0f0f0; color: #333; }
     .toneshift-btn-apply { background: #6366F1; color: white; font-weight: 600; }
+    .toneshift-feedback { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+    .toneshift-feedback-label { font-size: 13px; color: #666; }
+    .toneshift-feedback-btn { font-size: 20px; background: none; border: 1px solid #e0e0e0;
+      border-radius: 8px; padding: 4px 10px; cursor: pointer; transition: all 0.2s; }
+    .toneshift-feedback-btn:hover { background: #f0f0f0; }
+    .toneshift-feedback-selected { border-color: #6366F1; background: #EEF2FF; }
+    .toneshift-feedback-disabled { opacity: 0.3; pointer-events: none; }
     .toneshift-spinner { text-align: center; padding: 24px; color: #6366F1; }
   `;
 
@@ -1092,9 +1344,9 @@ function createPreviewDialog(tone: string, originalText: string): HTMLElement {
   return host;
 }
 
-function updateDialogWithResult(host: HTMLElement, converted: string) {
+// conversionId được trả về từ API response để link feedback với conversion
+function updateDialogWithResult(host: HTMLElement, converted: string, conversionId: string) {
   const shadow = host.shadowRoot!;
-  const dialog = shadow.querySelector('.toneshift-dialog')!;
   const spinner = shadow.querySelector('.toneshift-spinner')!;
 
   const convLabel = document.createElement('div');
@@ -1105,6 +1357,35 @@ function updateDialogWithResult(host: HTMLElement, converted: string) {
   convText.className = 'toneshift-text toneshift-converted';
   convText.textContent = converted; // textContent = safe
 
+  // Feedback row: thumbs up/down
+  const feedbackRow = document.createElement('div');
+  feedbackRow.className = 'toneshift-feedback';
+
+  const feedbackLabel = document.createElement('span');
+  feedbackLabel.className = 'toneshift-feedback-label';
+  feedbackLabel.textContent = 'How was this?';
+
+  const thumbsUp = document.createElement('button');
+  thumbsUp.className = 'toneshift-feedback-btn';
+  thumbsUp.textContent = '\u{1F44D}'; // 👍
+  thumbsUp.addEventListener('click', () => {
+    sendFeedback(conversionId, 'positive');
+    thumbsUp.classList.add('toneshift-feedback-selected');
+    thumbsDown.classList.add('toneshift-feedback-disabled');
+  });
+
+  const thumbsDown = document.createElement('button');
+  thumbsDown.className = 'toneshift-feedback-btn';
+  thumbsDown.textContent = '\u{1F44E}'; // 👎
+  thumbsDown.addEventListener('click', () => {
+    sendFeedback(conversionId, 'negative');
+    thumbsDown.classList.add('toneshift-feedback-selected');
+    thumbsUp.classList.add('toneshift-feedback-disabled');
+  });
+
+  feedbackRow.append(feedbackLabel, thumbsUp, thumbsDown);
+
+  // Action buttons
   const actions = document.createElement('div');
   actions.className = 'toneshift-actions';
 
@@ -1115,14 +1396,31 @@ function updateDialogWithResult(host: HTMLElement, converted: string) {
 
   const applyBtn = document.createElement('button');
   applyBtn.className = 'toneshift-btn toneshift-btn-apply';
-  applyBtn.textContent = 'Apply ✓';
+  applyBtn.textContent = 'Apply \u2713'; // Apply ✓
   applyBtn.addEventListener('click', () => {
     replaceSelectedText(converted);
     host.remove();
   });
 
   actions.append(cancelBtn, applyBtn);
-  spinner.replaceWith(convLabel, convText, actions);
+  spinner.replaceWith(convLabel, convText, feedbackRow, actions);
+}
+
+// Gửi feedback async - fire and forget, không block UX
+async function sendFeedback(conversionId: string, rating: 'positive' | 'negative') {
+  try {
+    const token = await getAuthToken();
+    await fetch(`${API_BASE}/api/feedback/conversion`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({ conversionId, rating }),
+    });
+  } catch {
+    // Silent fail - feedback không quan trọng bằng core UX
+  }
 }
 
 // Apply: replace text tại vị trí đã lưu
@@ -1602,49 +1900,51 @@ export async function checkDataConsistency() {
 
 ---
 
-## Execution Checklist - Phase 1 (25 Tasks)
+## Execution Checklist - Phase 1 (27 Tasks)
 
-### Setup & Backend (Tasks 1-9)
+### Setup & Backend (Tasks 1-11)
 - [ ] Task 1: Project Initialization
 - [ ] Task 2: Backend Project Setup
 - [ ] Task 3: Firebase Admin SDK Setup
 - [ ] Task 4: Authentication Middleware (email verification)
 - [ ] Task 5: Quota Service (atomic transactions) ⚠️ CRITICAL
-- [ ] Task 6: Rate Limiting Middleware
+- [ ] Task 6: Rate Limiting Middleware + Cost Guard
 - [ ] Task 7: Tiered LLM Service (GPT-4.1 nano + Claude 3 Haiku)
 - [ ] Task 8: Conversion API Endpoint
-- [ ] Task 9: Stripe Payment Integration
+- [ ] Task 9: Feedback Service (per-conversion + general)
+- [ ] Task 10: Feedback Analytics (model quality monitoring)
+- [ ] Task 11: Stripe Payment Integration
 
-### Frontend & Extension (Tasks 10-14)
-- [ ] Task 10: Frontend Project Setup
-- [ ] Task 11: Firebase Auth Integration
-- [ ] Task 12: API Client
-- [ ] Task 13: Main ToneShift UI
-- [ ] Task 14: Chrome Extension (universal text input)
+### Frontend & Extension (Tasks 12-16)
+- [ ] Task 12: Frontend Project Setup
+- [ ] Task 13: Firebase Auth Integration
+- [ ] Task 14: API Client
+- [ ] Task 15: Main ToneShift UI + Feedback Form
+- [ ] Task 16: Chrome Extension (context menu + preview dialog + feedback)
 
-### Security Hardening (Tasks 15-18) ⚠️ CRITICAL
-- [ ] Task 15: Prompt Injection Detection
-- [ ] Task 16: Output Validation & Similarity Check
-- [ ] Task 17: Disposable Email Blocking
-- [ ] Task 18: Firestore Security Rules
+### Security Hardening (Tasks 17-20) ⚠️ CRITICAL
+- [ ] Task 17: Prompt Injection Detection
+- [ ] Task 18: Output Validation & Similarity Check
+- [ ] Task 19: Disposable Email Blocking
+- [ ] Task 20: Firestore Security Rules
 
-### Backup & Recovery (Tasks 19-22) ⚠️ CRITICAL
-- [ ] Task 19: Audit Logging Service
-- [ ] Task 20: Daily Backup Job (Cloud Scheduler)
-- [ ] Task 21: Recovery Service (Stripe sync + Backup restore)
-- [ ] Task 22: Admin Recovery API + Data Consistency Monitor
+### Backup & Recovery (Tasks 21-24) ⚠️ CRITICAL
+- [ ] Task 21: Audit Logging Service
+- [ ] Task 22: Daily Backup Job (Cloud Scheduler)
+- [ ] Task 23: Recovery Service (Stripe sync + Backup restore)
+- [ ] Task 24: Admin Recovery API + Data Consistency Monitor
 
-### Build & Deploy (Tasks 23-25)
-- [ ] Task 23: Build Configuration
-- [ ] Task 24: Deployment Configuration
-- [ ] Task 25: Security & Recovery Documentation
+### Build & Deploy (Tasks 25-27)
+- [ ] Task 25: Build Configuration
+- [ ] Task 26: Deployment Configuration
+- [ ] Task 27: Security & Recovery Documentation
 
 ## Execution Checklist - Phase 2
 
-- [ ] Task 26: Shared Extension Core
-- [ ] Task 27: Firefox Extension
-- [ ] Task 28: Edge Extension
-- [ ] Task 29: Team Billing
+- [ ] Task 28: Shared Extension Core
+- [ ] Task 29: Firefox Extension
+- [ ] Task 30: Edge Extension
+- [ ] Task 31: Team Billing
 
 ---
 
