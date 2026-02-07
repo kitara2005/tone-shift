@@ -242,11 +242,13 @@ Conversions: 200,000 × 5 × 30 = 30,000,000 conv/tháng
 | Vercel | ~1,500 GB-Hours | **~$290** |
 | **TOTAL** | | **~$2,534/tháng** |
 
-**Kịch bản C: Có Cost Guard (daily budget 50K conv/ngày)**
+**Kịch bản C: Có Cost Guard (daily budget 50K FREE conv/ngày)**
 
 ```
-Max: 50,000/ngày × 30 = 1,500,000 conv/tháng
-→ Phần lớn users bị từ chối khi hệ thống đạt giới hạn
+Max FREE: 50,000/ngày × 30 = 1,500,000 free conv/tháng
+PRO/TEAM: Unlimited (không bị ảnh hưởng bởi daily budget)
+→ Chỉ FREE users bị từ chối khi hệ thống đạt giới hạn
+→ PRO users luôn được serve, đảm bảo paying customers happy
 ```
 
 | Dịch vụ | Cách tính | Chi phí/tháng |
@@ -256,7 +258,7 @@ Max: 50,000/ngày × 30 = 1,500,000 conv/tháng
 | Firestore + Vercel | Minimal | **~$35** |
 | **TOTAL** | | **~$140/tháng** |
 
-> Rẻ nhưng UX tệ — 1M users mà chỉ serve 50K conv/ngày.
+> Rẻ và vẫn đảm bảo UX cho paying users. FREE users có thể bị limit khi traffic cao, nhưng PRO users luôn được ưu tiên.
 
 **So sánh 3 kịch bản:**
 
@@ -382,17 +384,23 @@ const PER_USER_LIMITS: PerUserLimits = {
 // Daily budget tự động scale theo số Pro users
 // Logic: revenue từ Pro users fund cho free tier capacity
 //
-// BASE_DAILY_BUDGET: giới hạn khi chưa có Pro user (MVP giai đoạn đầu)
+// QUAN TRỌNG: Daily budget CHỈ ÁP DỤNG CHO FREE USERS
+// PRO/TEAM/ENTERPRISE users LUÔN ĐƯỢC ƯU TIÊN, không bị block bởi daily budget
+//
+// BASE_DAILY_BUDGET: giới hạn FREE tier khi chưa có Pro user (MVP giai đoạn đầu)
 // CONV_PER_PRO_USER: mỗi Pro user "mở khóa" thêm bao nhiêu free conv/ngày
 //
-// Ví dụ scaling:
-//   0 Pro users   → 50,000 conv/ngày   (MVP baseline)
-//   100 Pro users → 150,000 conv/ngày   ($499/mo revenue funds more capacity)
-//   500 Pro users → 550,000 conv/ngày   ($2,495/mo revenue)
-//   1000 Pro users → 1,050,000 conv/ngày ($4,990/mo revenue)
+// Ví dụ scaling (chỉ ảnh hưởng FREE users):
+//   0 Pro users   → 50,000 free conv/ngày   (MVP baseline)
+//   100 Pro users → 150,000 free conv/ngày  ($499/mo revenue funds more capacity)
+//   500 Pro users → 550,000 free conv/ngày  ($2,495/mo revenue)
+//   1000 Pro users → 1,050,000 free conv/ngày ($4,990/mo revenue)
 //
 // Chi phí 1M free conv/ngày = ~$2,100/tháng (GPT-4.1 nano)
 // Revenue 500 Pro users = $2,495/tháng → đủ cover
+//
+// PRO users: Unlimited, không bị ảnh hưởng bởi daily budget
+// Lý do: Họ đang trả tiền, phải đảm bảo service quality
 
 const BASE_DAILY_BUDGET = 50_000;        // Baseline khi 0 Pro users
 const CONV_PER_PRO_USER = 1_000;         // Mỗi Pro user mở thêm 1K free conv/ngày
@@ -422,13 +430,26 @@ export async function getDailyBudget(): Promise<number> {
   return Math.min(budget, MAX_DAILY_BUDGET);
 }
 
-// Check daily budget
-export async function checkDailyBudget(): Promise<{
+// Check daily budget - CHỈ ÁP DỤNG CHO FREE USERS
+// PRO/TEAM/ENTERPRISE luôn bypass check này
+export async function checkDailyBudget(tier: string): Promise<{
   allowed: boolean;
   totalToday: number;
   dailyBudget: number;
   reason?: string;
+  bypassed?: boolean;
 }> {
+  // PRO users luôn được ưu tiên - không bị block bởi daily budget
+  if (tier !== 'free') {
+    return {
+      allowed: true,
+      totalToday: 0,
+      dailyBudget: Infinity,
+      bypassed: true,
+    };
+  }
+
+  // Chỉ FREE users bị check daily budget
   const db = getFirestore();
   const today = new Date().toISOString().split('T')[0];
   const counterRef = db.collection('daily_stats').doc(today);
@@ -438,18 +459,19 @@ export async function checkDailyBudget(): Promise<{
     getDailyBudget(),
   ]);
 
-  const totalToday = doc.data()?.totalConversions ?? 0;
+  // Chỉ đếm FREE conversions cho budget check
+  const freeConversionsToday = doc.data()?.freeConversions ?? 0;
 
-  if (totalToday >= dailyBudget) {
+  if (freeConversionsToday >= dailyBudget) {
     return {
       allowed: false,
-      totalToday,
+      totalToday: freeConversionsToday,
       dailyBudget,
       reason: 'daily_budget_exceeded',
     };
   }
 
-  return { allowed: true, totalToday, dailyBudget };
+  return { allowed: true, totalToday: freeConversionsToday, dailyBudget };
 }
 
 // Increment counter sau mỗi conversion thành công
@@ -488,7 +510,8 @@ Request đến
   ├─ 3. User rate limit (20/min)        → Block nếu vượt
   ├─ 4. Input length check (≤5000 chars) → Block nếu quá dài
   ├─ 5. Per-user burst check (5/min)    → Block nếu spam
-  ├─ 6. Daily budget check              → Block nếu vượt ngân sách
+  ├─ 6. Daily budget check              → Block FREE users nếu vượt ngân sách
+  │                                        (PRO/TEAM/ENTERPRISE bypass step này)
   ├─ 7. Quota check (free: 10/day)      → Block nếu hết quota
   ├─ 8. Sanitize + escape input         → Clean input
   ├─ 9. Prompt injection detection      → Block nếu phát hiện
